@@ -1,7 +1,9 @@
 pandas>=2.2.0
 numpy>=1.26.0
-scikit-learn>=1.4.0
+scikit-learn>=1.9.0
 xgboost>=3.0.0
+imbalanced-learn>=0.14.0
+shap>=0.48.0
 lifelines>=0.30.0
 umap-learn>=0.5.6
 pyod>=2.0.0
