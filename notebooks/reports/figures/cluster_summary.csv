@@ -1,0 +1,5 @@
+cluster,n_countries,avg_commitments,avg_repayment_ratio,examples
+0,37,3616424042.5135136,0.15663614487603056,"Albania; Angola; Antigua And Barbuda; Armenia; Bahamas, The"
+1,37,14685038858.472162,0.4230087039183017,Argentina; Australia; Belarus; Belize; Bosnia And Herzegovina
+2,37,7505135405.708379,0.6702356945849116,Algeria; Austria; Azerbaijan; Brazil; Caribbean
+3,37,1101461947.3372972,0.9172762750307013,Bangladesh; Bulgaria; Chad; Czechia; Estonia
