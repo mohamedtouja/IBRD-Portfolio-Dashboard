@@ -11,6 +11,8 @@ filters run uncached on each rerun, so changing a filter never re-reads a CSV.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import streamlit as st
@@ -88,8 +90,8 @@ def get_forecasts() -> pd.DataFrame:
 
 
 @st.cache_resource(show_spinner="Loading repayment model…")
-def get_predictor() -> RepaymentPredictor | None:
-    """Load the repayment classifier.
+def _load_predictor() -> RepaymentPredictor | None:
+    """Load the repayment classifier, memoised for the server's lifetime.
 
     Returns:
         A ready predictor, or ``None`` when the artifacts are unavailable.
@@ -98,8 +100,8 @@ def get_predictor() -> RepaymentPredictor | None:
 
 
 @st.cache_resource
-def get_segmenter() -> CountrySegmenter | None:
-    """Load the country segmentation models.
+def _load_segmenter() -> CountrySegmenter | None:
+    """Load the country segmentation models, memoised.
 
     Returns:
         A ready segmenter, or ``None`` when the artifacts are unavailable.
@@ -108,8 +110,8 @@ def get_segmenter() -> CountrySegmenter | None:
 
 
 @st.cache_resource(show_spinner="Fitting anomaly detector…")
-def get_anomaly_scorer() -> AnomalyScorer | None:
-    """Fit the Isolation Forest used for live anomaly scoring.
+def _load_anomaly_scorer() -> AnomalyScorer | None:
+    """Fit the Isolation Forest used for live anomaly scoring, memoised.
 
     Notebook 08 never persisted its estimator, so it is refitted here from the
     cleaned portfolio using the notebook's parameters.
@@ -118,6 +120,107 @@ def get_anomaly_scorer() -> AnomalyScorer | None:
         A fitted scorer, or ``None`` when fitting was not possible.
     """
     return AnomalyScorer.fit(loaders.load_loans())
+
+
+def _without_caching_failure(loader: Any) -> Any:
+    """Call a cached loader, refusing to let a failure stick.
+
+    ``st.cache_resource`` memoises whatever it is given, ``None`` included, for
+    the lifetime of the server. A load that fails once for a transient reason --
+    a notebook rewriting a pickle while the app reads it, for instance -- would
+    otherwise keep reporting the artifact as unavailable until the app is
+    restarted. Evicting the entry on failure lets the next rerun retry.
+
+    Args:
+        loader: A ``st.cache_resource``-decorated zero-argument loader.
+
+    Returns:
+        Whatever the loader returned.
+    """
+    result = loader()
+    if result is None:
+        loader.clear()
+    return result
+
+
+def get_predictor() -> RepaymentPredictor | None:
+    """Return the repayment classifier, retrying after a failed load.
+
+    Returns:
+        A ready predictor, or ``None`` when the artifacts are unavailable.
+    """
+    return _without_caching_failure(_load_predictor)
+
+
+def get_segmenter() -> CountrySegmenter | None:
+    """Return the country segmentation models, retrying after a failed load.
+
+    Returns:
+        A ready segmenter, or ``None`` when the artifacts are unavailable.
+    """
+    return _without_caching_failure(_load_segmenter)
+
+
+def get_anomaly_scorer() -> AnomalyScorer | None:
+    """Return the anomaly scorer, retrying after a failed fit.
+
+    Returns:
+        A fitted scorer, or ``None`` when fitting was not possible.
+    """
+    return _without_caching_failure(_load_anomaly_scorer)
+
+
+def _display_path(path: Path) -> str:
+    """Render an artifact path for display, shortened when it sits in the project.
+
+    Falls back to the absolute path, since the location can be redirected outside
+    the project root by the ``IBRD_*`` environment overrides.
+
+    Args:
+        path: The path to render.
+
+    Returns:
+        A project-relative path when possible, otherwise the absolute path.
+    """
+    try:
+        return str(path.relative_to(config.PROJECT_ROOT))
+    except ValueError:
+        return str(path)
+
+
+def missing_artifacts(*paths: Path) -> list[Path]:
+    """List which of the given artifact paths are absent from disk.
+
+    Args:
+        *paths: Artifact locations to test.
+
+    Returns:
+        The subset that does not exist.
+    """
+    return [path for path in paths if not path.exists()]
+
+
+def artifact_problem(*paths: Path) -> str:
+    """Describe why an artifact-backed feature is unavailable.
+
+    Distinguishes a genuinely missing file from one that is present but failed
+    to load, because the remedy differs: regenerate versus inspect the logs.
+
+    Args:
+        *paths: Artifact locations the feature depends on.
+
+    Returns:
+        A sentence naming the specific problem.
+    """
+    absent = missing_artifacts(*paths)
+    if absent:
+        names = ", ".join(f"`{_display_path(path)}`" for path in absent)
+        return f"Missing file(s): {names}."
+    return (
+        "The files are present but could not be loaded. This usually means a notebook was "
+        "rewriting them as the app read them, or that `imbalanced-learn` or `xgboost` is "
+        "missing from the environment running Streamlit. Rerun to retry; see the logs for the error."
+    )
 
 
 def metric_row(items: list[tuple[str, str]], columns: int = 4) -> None:
@@ -561,11 +664,14 @@ with tab_forecast:
 with tab_predict:
     predictor = get_predictor()
     if predictor is None:
+        problem = artifact_problem(config.REPAYMENT_MODEL_PATH, config.REPAYMENT_FEATURES_PATH)
         st.info(
-            "Repayment model not found. Expected `models_pickle/repayment_best_model.pkl` and "
-            "`models_pickle/repayment_features.pkl`. Run `notebooks/05_repayment_prediction_model.ipynb`.",
+            f"Repayment model unavailable. {problem} "
+            "Regenerate it with `notebooks/05_repayment_prediction_model.ipynb`.",
             icon=":material/info:",
         )
+        if st.button("Retry loading the model", icon=":material/refresh:", key="retry_predictor"):
+            st.rerun()
     else:
         st.caption(
             "Scores the probability that a loan reaches at least 95% repayment "
@@ -726,7 +832,8 @@ with tab_explain:
     predictor = get_predictor()
     if predictor is None:
         st.info(
-            "Repayment model not found, so explanations cannot be produced.",
+            "Repayment model unavailable, so explanations cannot be produced. "
+            f"{artifact_problem(config.REPAYMENT_MODEL_PATH, config.REPAYMENT_FEATURES_PATH)}",
             icon=":material/info:",
         )
     else:

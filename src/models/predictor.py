@@ -156,9 +156,12 @@ class RepaymentPredictor:
 
             pipeline = joblib.load(model_path)
             feature_names = joblib.load(features_path)
-        except (OSError, ImportError, ValueError, AttributeError, ModuleNotFoundError):
-            # A ModuleNotFoundError here almost always means imbalanced-learn or
-            # xgboost is absent from the serving environment.
+        except Exception:  # noqa: BLE001
+            # Deliberately broad: unpickling arbitrary binary can raise almost
+            # anything -- EOFError and UnpicklingError on a truncated or
+            # half-written file, ModuleNotFoundError when imbalanced-learn or
+            # xgboost is absent from the serving environment. The caller only
+            # needs to know the model is unusable, and the traceback is logged.
             logger.exception("Could not deserialise the repayment model")
             return None
 

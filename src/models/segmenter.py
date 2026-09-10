@@ -93,7 +93,8 @@ class CountrySegmenter:
 
             kmeans = joblib.load(kmeans_path)
             scaler = joblib.load(scaler_path)
-        except (OSError, ImportError, ValueError, AttributeError, ModuleNotFoundError):
+        except Exception:  # noqa: BLE001
+            # Broad by design; see RepaymentPredictor.load for the rationale.
             logger.exception("Could not deserialise the country segmentation models")
             return None
 
