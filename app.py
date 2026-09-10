@@ -216,11 +216,39 @@ def artifact_problem(*paths: Path) -> str:
     if absent:
         names = ", ".join(f"`{_display_path(path)}`" for path in absent)
         return f"Missing file(s): {names}."
-    return (
-        "The files are present but could not be loaded. This usually means a notebook was "
-        "rewriting them as the app read them, or that `imbalanced-learn` or `xgboost` is "
-        "missing from the environment running Streamlit. Rerun to retry; see the logs for the error."
-    )
+    return "The files are present but could not be loaded."
+
+
+def show_load_diagnostics() -> None:
+    """Render the concrete reason the repayment model failed to load.
+
+    Shows the captured exception plus the interpreter and package versions
+    actually serving the app, which is what distinguishes a corrupt artifact
+    from an environment mismatch.
+    """
+    from src.models.predictor import last_load_error
+
+    error = last_load_error()
+    if error:
+        st.code(error, language="text")
+
+    with st.expander("Environment running this app", icon=":material/bug_report:"):
+        import importlib.metadata as metadata
+        import sys
+
+        st.write(f"**Interpreter:** `{sys.executable}`")
+        rows = []
+        for package in ("joblib", "scikit-learn", "imbalanced-learn", "xgboost", "streamlit"):
+            try:
+                rows.append({"package": package, "version": metadata.version(package)})
+            except metadata.PackageNotFoundError:
+                rows.append({"package": package, "version": "NOT INSTALLED"})
+        st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True, key="tbl_env_diag")
+        st.write(f"**Model path:** `{config.REPAYMENT_MODEL_PATH}`")
+        if config.REPAYMENT_MODEL_PATH.exists():
+            st.write(f"**Size on disk:** {config.REPAYMENT_MODEL_PATH.stat().st_size:,} bytes")
+        else:
+            st.write("**Size on disk:** file absent")
 
 
 def metric_row(items: list[tuple[str, str]], columns: int = 4) -> None:
@@ -670,6 +698,7 @@ with tab_predict:
             "Regenerate it with `notebooks/05_repayment_prediction_model.ipynb`.",
             icon=":material/info:",
         )
+        show_load_diagnostics()
         if st.button("Retry loading the model", icon=":material/refresh:", key="retry_predictor"):
             st.rerun()
     else:

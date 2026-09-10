@@ -30,6 +30,21 @@ from src import config
 
 logger = logging.getLogger(__name__)
 
+_last_load_error: str | None = None
+
+
+def last_load_error() -> str | None:
+    """Describe the most recent failed model load.
+
+    Lets the presentation layer show the real cause instead of a generic
+    "unavailable" message, which otherwise forces a trip to the server logs.
+
+    Returns:
+        A ``"ExceptionType: message"`` string, or ``None`` when the last load
+        attempt succeeded or none has been made.
+    """
+    return _last_load_error
+
 
 def derive_loan_size_category(principal: float) -> str:
     """Bucket a principal amount using notebook 02's bin edges.
@@ -140,10 +155,17 @@ class RepaymentPredictor:
             A ready predictor, or ``None`` when either artifact is missing or
             cannot be deserialised.
         """
+        global _last_load_error
+
         model_path = model_path or config.REPAYMENT_MODEL_PATH
         features_path = features_path or config.REPAYMENT_FEATURES_PATH
 
         if not model_path.exists() or not features_path.exists():
+            _last_load_error = (
+                f"File not found: "
+                f"{'model ' if not model_path.exists() else ''}"
+                f"{'features' if not features_path.exists() else ''}".strip()
+            )
             logger.warning(
                 "Repayment artifacts missing (model=%s, features=%s)",
                 model_path.exists(),
@@ -156,15 +178,17 @@ class RepaymentPredictor:
 
             pipeline = joblib.load(model_path)
             feature_names = joblib.load(features_path)
-        except Exception:  # noqa: BLE001
+        except Exception as error:  # noqa: BLE001
             # Deliberately broad: unpickling arbitrary binary can raise almost
             # anything -- EOFError and UnpicklingError on a truncated or
             # half-written file, ModuleNotFoundError when imbalanced-learn or
             # xgboost is absent from the serving environment. The caller only
             # needs to know the model is unusable, and the traceback is logged.
+            _last_load_error = f"{type(error).__name__}: {error}"
             logger.exception("Could not deserialise the repayment model")
             return None
 
+        _last_load_error = None
         logger.info("Loaded repayment pipeline with %d features", len(feature_names))
         return cls(pipeline, list(feature_names))
 
